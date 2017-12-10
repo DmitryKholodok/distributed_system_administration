@@ -1,7 +1,7 @@
 package by.kholodok.coursework.zk.impl;
 
+import by.kholodok.coursework.zk.ZNodeMonitor;
 import by.kholodok.coursework.zk.ZkConnector;
-import by.kholodok.coursework.zk.ZnodeMonitor;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -22,9 +22,12 @@ public class ZkConnectorImpl implements ZkConnector, Watcher {
 
     private ZooKeeper zk;
     private CountDownLatch connSignal = new CountDownLatch(1);
-    private ZnodeMonitor znodeMonitor;
+    private ZNodeMonitor znodeMonitor;
 
-    public ZkConnectorImpl(ZnodeMonitor znodeMonitor) {
+    public ZkConnectorImpl() {
+    }
+
+    public void setZNodeMonitor(ZNodeMonitor znodeMonitor) {
         this.znodeMonitor = znodeMonitor;
     }
 

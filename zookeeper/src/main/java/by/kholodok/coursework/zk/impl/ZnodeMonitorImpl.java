@@ -1,8 +1,8 @@
 package by.kholodok.coursework.zk.impl;
 
 import by.kholodok.coursework.exception.NoServiceFoundException;
-import by.kholodok.coursework.observer.ZnodeObserver;
-import by.kholodok.coursework.zk.ZnodeMonitor;
+import by.kholodok.coursework.observer.ZNodeObserver;
+import by.kholodok.coursework.zk.ZNodeMonitor;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -16,7 +16,7 @@ import java.util.Map;
  * Created by dmitrykholodok on 12/4/17
  */
 
-public class ZnodeMonitorImpl implements ZnodeMonitor {
+public class ZNodeMonitorImpl implements ZNodeMonitor {
 
     private static final Logger LOGGER = LogManager.getLogger(ZkConnectorImpl.class);
 
@@ -25,7 +25,7 @@ public class ZnodeMonitorImpl implements ZnodeMonitor {
     private boolean dead;
     private Map<String, ObserverInfo> observerMap = new HashMap<>(); // znode path - > data
 
-    public ZnodeMonitorImpl(ZooKeeper zk) {
+    public ZNodeMonitorImpl(ZooKeeper zk) {
         this.zk = zk;
     }
 
@@ -33,9 +33,9 @@ public class ZnodeMonitorImpl implements ZnodeMonitor {
 
         private String serviceName;
         private String serviceHost;
-        private ZnodeObserver znodeObserver;
+        private ZNodeObserver znodeObserver;
 
-        public ObserverInfo(String serviceName, String host, ZnodeObserver znodeObserver) {
+        public ObserverInfo(String serviceName, String host, ZNodeObserver znodeObserver) {
             this.serviceName = serviceName;
             this.serviceHost = host;
             this.znodeObserver = znodeObserver;
@@ -94,7 +94,7 @@ public class ZnodeMonitorImpl implements ZnodeMonitor {
     }
 
     @Override
-    public void addObserverToService(String serviceName, ZnodeObserver znodeObserver) throws NoServiceFoundException {
+    public void addObserverToService(String serviceName, ZNodeObserver znodeObserver) throws NoServiceFoundException {
         String serviceZnodePath = "/" + serviceName;
         String serviceHost = null;
         try {
@@ -126,7 +126,7 @@ public class ZnodeMonitorImpl implements ZnodeMonitor {
         return (int)Math.random() * upperBound;
     }
 
-    private void addObserver(String terminalZnodePath, String serviceName, String serviceHost, ZnodeObserver znodeObserver) { // znode in not null
+    private void addObserver(String terminalZnodePath, String serviceName, String serviceHost, ZNodeObserver znodeObserver) { // znode in not null
         if (observerMap.get(terminalZnodePath) == null) {
             ObserverInfo observerInfo = new ObserverInfo(serviceName, serviceHost, znodeObserver);
             observerMap.put(terminalZnodePath, observerInfo);
@@ -135,6 +135,9 @@ public class ZnodeMonitorImpl implements ZnodeMonitor {
 
     private void updateHostAndEstablishWatch(String deletedZnodePath) {
         ObserverInfo observerInfo = observerMap.get(deletedZnodePath);
+        if (observerInfo == null) {
+            return;
+        }
         String serviceZnodePath = "/" + observerInfo.serviceName;
         String terminalZnodePath = null;
         try {
