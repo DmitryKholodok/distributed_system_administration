@@ -12,6 +12,7 @@ import java.io.Serializable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.locks.Lock;
 
 /**
  * Created by dmitrykholodok on 12/4/17
@@ -20,11 +21,8 @@ import java.util.Map;
 public class ZNodeMonitorImpl implements ZNodeMonitor {
 
     private static final Logger LOGGER = LogManager.getLogger(ZkConnectorImpl.class);
-
-    private ZooKeeper zk;
-
-    private boolean dead;
-    private Map<String, ObserverInfo> observerMap = new HashMap<>(); // znode path - > data
+    private final Map<String, ObserverInfo> observerMap = new HashMap<>(); // znode path - > data
+    private final ZooKeeper zk;
 
     public ZNodeMonitorImpl(ZooKeeper zk) {
         this.zk = zk;
@@ -45,17 +43,14 @@ public class ZNodeMonitorImpl implements ZNodeMonitor {
 
     @Override
     public void process(WatchedEvent event) {
-        String znodePath = event.getPath();
-        // event type -> something changed in the zk . . .
-        switch (event.getType()) {
-
+        String zNodePath = event.getPath();
+        switch (event.getType()) {  // event type -> something changed in the zookeeper . . .
             case None: {
-                // zk state
-                switch (event.getState()) {
+
+                switch (event.getState()) { // zookeeper connection state
 
                     case Expired: {  // case SyncConnected: -> describes in zk class
-                        LOGGER.log(Level.WARN, "Got expired event type!");
-                        dead = true;
+                        LOGGER.log(Level.WARN, "Session expired!");
                         break;
                     }
 
@@ -69,89 +64,93 @@ public class ZNodeMonitorImpl implements ZNodeMonitor {
 
             case NodeDeleted: {
                 LOGGER.log(Level.INFO, "The watched node was deleted!");
-                updateHostAndEstablishWatch(znodePath);
+                updateHostAndEstablishWatch(zNodePath);
                 break;
             }
         }
     }
 
     @Override
-    public String createServiceZnode(String serviceName, byte[] zNodeData) {
-
-        if (zk == null) {
-            return null;
+    public String createServiceZNode(String serviceName, byte[] zNodeData) {
+        if (zk != null) {
+            String path = null;
+            try {
+                String zNodePath = "/" + serviceName + "/n_";
+                path = zk.create(zNodePath, zNodeData, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+            } catch (KeeperException | InterruptedException e) {
+                LOGGER.log(Level.ERROR, "Exception in the create process. " + e);
+                return null;
+            }
+            LOGGER.log(Level.INFO, "Created a ZNode for " + serviceName);
+            return path;
         }
-
-        LOGGER.log(Level.INFO, "Creating a ZNode for " + serviceName);
-
-        String path = null;
-        try {
-            String zNodePath = "/" + serviceName + "/n_";
-            path = zk.create(zNodePath, zNodeData, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
-        } catch (KeeperException | InterruptedException e) {
-            LOGGER.log(Level.ERROR, "Exception in the create process. " + e);
-        }
-        return path;
+        return null;
     }
 
     @Override
-    public void addObserverToService(String serviceName, ZNodeObserver zNodeObserver) throws NoServiceFoundException {
+    public boolean addObserverToService(String serviceName, ZNodeObserver zNodeObserver) throws NoServiceFoundException {
         String serviceZNodePath = "/" + serviceName;
         String serviceHost = null;
         try {
-            String terminalZNodePath = receiveTerminalZnodePath(serviceZNodePath);
+            String terminalZNodePath = receiveTerminalZNodePath(serviceZNodePath);
+            if (terminalZNodePath == null) {
+                throw new NoServiceFoundException();
+            }
             byte[] serviceHostBytes = zk.getData(terminalZNodePath, true, null); // set watch in true var
             serviceHost = new String(serviceHostBytes);
-            addObserver(terminalZNodePath, serviceName, serviceHost, zNodeObserver);
+            saveObserverInfo(terminalZNodePath, serviceName, serviceHost, zNodeObserver);
         } catch (KeeperException | InterruptedException e) {
             LOGGER.log(Level.ERROR, e);
+            return false;
         }
         zNodeObserver.update(serviceHost);
+        return true;
     }
 
-    @Override
-    public boolean isDead() {
-        return dead;
-    }
-
-    private String receiveTerminalZnodePath(String serviceZNodePath) throws NoServiceFoundException, KeeperException, InterruptedException {
+    private String receiveTerminalZNodePath(String serviceZNodePath) throws KeeperException, InterruptedException {
         List<String> childrenPathList= zk.getChildren(serviceZNodePath, false);
-        if (childrenPathList == null) {
-            throw new NoServiceFoundException();
+        if (childrenPathList != null) {
+            int childNumberInList = generateId(childrenPathList.size());
+            String zNodeName = childrenPathList.get(childNumberInList);
+            return serviceZNodePath + "/" + zNodeName;
         }
-        int childNumberInList = generateId(childrenPathList.size());
-        String zNodeName = childrenPathList.get(childNumberInList);
-        return serviceZNodePath + "/" + zNodeName;
+        return null;
     }
 
     private int generateId(int upperBound) {
         return (int)Math.random() * upperBound;
     }
 
-    private void addObserver(String terminalZnodePath, String serviceName, String serviceHost, ZNodeObserver znodeObserver) { // znode in not null
-        if (observerMap.get(terminalZnodePath) == null) {
+    private void saveObserverInfo(String terminalZNodePath, String serviceName, String serviceHost, ZNodeObserver znodeObserver) { // znode in not null
+        if (observerMap.get(terminalZNodePath) == null) {
             ObserverInfo observerInfo = new ObserverInfo(serviceName, serviceHost, znodeObserver);
-            observerMap.put(terminalZnodePath, observerInfo);
+            observerMap.put(terminalZNodePath, observerInfo);
         }
     }
 
-    private void updateHostAndEstablishWatch(String deletedZnodePath) {
-        ObserverInfo observerInfo = observerMap.get(deletedZnodePath);
-        if (observerInfo == null) {
-            return;
+    private boolean updateHostAndEstablishWatch(String deletedZNodePath) {
+        ObserverInfo observerInfo = observerMap.get(deletedZNodePath);
+        if (observerInfo != null) {
+            String serviceZNodePath = "/" + observerInfo.serviceName;
+            String terminalZNodePath = null;
+            try {
+                terminalZNodePath = receiveTerminalZNodePath(serviceZNodePath);
+                if (terminalZNodePath == null) {
+                    observerInfo.znodeObserver.update(null);
+                    observerMap.remove(deletedZNodePath);
+                    return false;
+                }
+                byte[] serviceHostBytes = zk.getData(terminalZNodePath, true, null);
+                observerInfo.serviceHost = new String(serviceHostBytes);
+            } catch (KeeperException | InterruptedException e ) {
+                LOGGER.log(Level.ERROR, e);
+                return false;
+            }
+            observerMap.remove(deletedZNodePath);
+            observerMap.put(terminalZNodePath, observerInfo);
+            return true;
         }
-        String serviceZnodePath = "/" + observerInfo.serviceName;
-        String terminalZnodePath = null;
-        try {
-            terminalZnodePath = receiveTerminalZnodePath(serviceZnodePath);
-            byte[] serviceHostBytes = zk.getData(terminalZnodePath, true, null); // set watch in true var
-            observerInfo.serviceHost = new String(serviceHostBytes);
-        } catch (KeeperException | InterruptedException | NoServiceFoundException e ) {
-            LOGGER.log(Level.ERROR, e);
-
-        }
-        observerMap.remove(deletedZnodePath);
-        observerMap.put(terminalZnodePath, observerInfo);
+        return false;
     }
 
 }

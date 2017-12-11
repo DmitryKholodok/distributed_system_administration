@@ -17,18 +17,17 @@ import java.util.concurrent.CountDownLatch;
 public class ZkConnectorImpl implements ZkConnector, Watcher {
 
     private static final Logger LOGGER = LogManager.getLogger(ZkConnectorImpl.class);
-
-    private static final int ZK_DEFAULT_SESSION_TIMEOUT = 10000;
+    private static final int ZK_DEFAULT_SESSION_TIMEOUT = 5000;
+    private final CountDownLatch connSignal = new CountDownLatch(1);
 
     private ZooKeeper zk;
-    private CountDownLatch connSignal = new CountDownLatch(1);
-    private ZNodeMonitor znodeMonitor;
+    private ZNodeMonitor zNodeMonitor;
 
     public ZkConnectorImpl() {
     }
 
-    public void setZNodeMonitor(ZNodeMonitor znodeMonitor) {
-        this.znodeMonitor = znodeMonitor;
+    public void setZNodeMonitor(ZNodeMonitor zNodeMonitor) {
+        this.zNodeMonitor = zNodeMonitor;
     }
 
     @Override
@@ -38,15 +37,11 @@ public class ZkConnectorImpl implements ZkConnector, Watcher {
 
     @Override
     public ZooKeeper connectToZk(String host, int sessionTimeout) {
+        LOGGER.log(Level.INFO, "Connecting to the " + host + " . . .");
         try {
-            LOGGER.log(Level.INFO, "Connecting to the " + host + " . . .");
             zk = new ZooKeeper(host, sessionTimeout, this);
-        } catch (IOException e) {
-            LOGGER.log(Level.ERROR, e);
-        }
-        try {
             connSignal.await();
-        } catch (InterruptedException e) {
+        } catch (InterruptedException | IOException e) {
             LOGGER.log(Level.ERROR, e);
         }
         LOGGER.log(Level.DEBUG, "Connected to the " + host);
@@ -54,28 +49,24 @@ public class ZkConnectorImpl implements ZkConnector, Watcher {
     }
 
     @Override
+    public void process(WatchedEvent event) {
+        if(event.getState() == Event.KeeperState.SyncConnected){
+            connSignal.countDown(); // one, two times -> will be error or not
+        } else {
+            if (zNodeMonitor != null)
+                zNodeMonitor.process(event);
+        }
+    }
+
+    @Override
     public void close() {
+        LOGGER.log(Level.INFO, "Closing zookeeper connection");
         try {
-            LOGGER.log(Level.INFO, "Closing zk connection");
             if (zk != null) {
                 zk.close();
             }
         } catch (InterruptedException e) {
             LOGGER.log(Level.ERROR, e);
-        }
-    }
-
-    @Override
-    public void process(WatchedEvent event) {
-        if(event.getState() == Event.KeeperState.SyncConnected){
-            connSignal.countDown(); // one, two times -> will be error or not
-        } else {
-            znodeMonitor.process(event);
-        }
-
-        if (znodeMonitor.isDead()) {
-            LOGGER.log(Level.INFO, "The connection was lost!");
-            close();
         }
     }
 
