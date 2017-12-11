@@ -14,10 +14,10 @@ public class ZNodeObserverImpl implements ZNodeObserver {
     private String hostPort = "";
 
     @Override
-    public void update(Object obj) {
+    public void update(String obj) {
         lock.lock();
         try {
-            hostPort = (String)obj;
+            hostPort = obj; // atomic reference
         } finally {
             lock.unlock();
         }

@@ -5,5 +5,5 @@ package by.kholodok.coursework.observer;
  */
 
 public interface ZNodeObserver {
-    void update(Object obj);
+    void update(String obj);
 }

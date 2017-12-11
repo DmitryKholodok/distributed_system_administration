@@ -18,7 +18,7 @@ public class ZkConnectorImpl implements ZkConnector, Watcher {
 
     private static final Logger LOGGER = LogManager.getLogger(ZkConnectorImpl.class);
 
-    private static final int ZK_DEFAULT_SESSION_TIMEOUT = 5000;
+    private static final int ZK_DEFAULT_SESSION_TIMEOUT = 10000;
 
     private ZooKeeper zk;
     private CountDownLatch connSignal = new CountDownLatch(1);

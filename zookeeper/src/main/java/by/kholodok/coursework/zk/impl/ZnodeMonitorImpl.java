@@ -8,6 +8,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.zookeeper.*;
 
+import java.io.Serializable;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,18 +76,18 @@ public class ZNodeMonitorImpl implements ZNodeMonitor {
     }
 
     @Override
-    public String createServiceZnode(String serviceName, String znodeName, byte[] znodeData) {
+    public String createServiceZnode(String serviceName, byte[] zNodeData) {
 
         if (zk == null) {
             return null;
         }
 
-        LOGGER.log(Level.INFO, "Creating a znode for " + serviceName + "service");
+        LOGGER.log(Level.INFO, "Creating a ZNode for " + serviceName);
 
         String path = null;
         try {
-            String znodePath = "/" + serviceName + "/" + znodeName + "_";
-            path = zk.create(znodePath, znodeData, null, CreateMode.EPHEMERAL_SEQUENTIAL);
+            String zNodePath = "/" + serviceName + "/n_";
+            path = zk.create(zNodePath, zNodeData, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
         } catch (KeeperException | InterruptedException e) {
             LOGGER.log(Level.ERROR, "Exception in the create process. " + e);
         }
@@ -94,18 +95,18 @@ public class ZNodeMonitorImpl implements ZNodeMonitor {
     }
 
     @Override
-    public void addObserverToService(String serviceName, ZNodeObserver znodeObserver) throws NoServiceFoundException {
-        String serviceZnodePath = "/" + serviceName;
+    public void addObserverToService(String serviceName, ZNodeObserver zNodeObserver) throws NoServiceFoundException {
+        String serviceZNodePath = "/" + serviceName;
         String serviceHost = null;
         try {
-            String terminalZnodePath = receiveTerminalZnodePath(serviceZnodePath);
-            byte[] serviceHostBytes = zk.getData(terminalZnodePath, true, null); // set watch in true var
+            String terminalZNodePath = receiveTerminalZnodePath(serviceZNodePath);
+            byte[] serviceHostBytes = zk.getData(terminalZNodePath, true, null); // set watch in true var
             serviceHost = new String(serviceHostBytes);
-            addObserver(terminalZnodePath, serviceName, serviceHost, znodeObserver);
+            addObserver(terminalZNodePath, serviceName, serviceHost, zNodeObserver);
         } catch (KeeperException | InterruptedException e) {
             LOGGER.log(Level.ERROR, e);
         }
-        znodeObserver.update(serviceHost);
+        zNodeObserver.update(serviceHost);
     }
 
     @Override
@@ -113,13 +114,14 @@ public class ZNodeMonitorImpl implements ZNodeMonitor {
         return dead;
     }
 
-    private String receiveTerminalZnodePath(String serviceZnodePath) throws NoServiceFoundException, KeeperException, InterruptedException {
-        List<String> childrenPathList= zk.getChildren(serviceZnodePath, false);
+    private String receiveTerminalZnodePath(String serviceZNodePath) throws NoServiceFoundException, KeeperException, InterruptedException {
+        List<String> childrenPathList= zk.getChildren(serviceZNodePath, false);
         if (childrenPathList == null) {
             throw new NoServiceFoundException();
         }
         int childNumberInList = generateId(childrenPathList.size());
-        return childrenPathList.get(childNumberInList);
+        String zNodeName = childrenPathList.get(childNumberInList);
+        return serviceZNodePath + "/" + zNodeName;
     }
 
     private int generateId(int upperBound) {
@@ -146,6 +148,7 @@ public class ZNodeMonitorImpl implements ZNodeMonitor {
             observerInfo.serviceHost = new String(serviceHostBytes);
         } catch (KeeperException | InterruptedException | NoServiceFoundException e ) {
             LOGGER.log(Level.ERROR, e);
+
         }
         observerMap.remove(deletedZnodePath);
         observerMap.put(terminalZnodePath, observerInfo);
