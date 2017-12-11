@@ -8,7 +8,8 @@
 
     <!-- Enables the Spring MVC @Controller programming model -->
     <annotation-driven />
-    <context:component-scan base-package="by.kholodok.coursework.service_admin.controller" />
+    <context:annotation-config/>
+    <context:component-scan base-package="by.kholodok.coursework.service_admin" />
 
     <beans:bean
             class="org.springframework.web.servlet.view.InternalResourceViewResolver">

@@ -7,6 +7,7 @@ package by.kholodok.coursework.service_admin.entity;
 public class ServiceEntity {
 
     private String serviceName;
+    private String ZNodePath;
     private String hostPort;
 
     public String getServiceName() {
@@ -23,5 +24,13 @@ public class ServiceEntity {
 
     public void setHostPort(String hostPort) {
         this.hostPort = hostPort;
+    }
+
+    public String getZNodePath() {
+        return ZNodePath;
+    }
+
+    public void setZNodePath(String ZNodePath) {
+        this.ZNodePath = ZNodePath;
     }
 }
