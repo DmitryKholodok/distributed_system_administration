@@ -1,11 +1,14 @@
 package by.kholodok.coursework.zkshell;
 
-import by.kholodok.coursework.zkshell.entity.ZNodeServiceEntity;
+import by.kholodok.coursework.zkshell.entity.ServiceData;
 import by.kholodok.coursework.zkshell.observer.RemoteServiceObserver;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.zookeeper.*;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -21,27 +24,16 @@ import java.util.concurrent.CountDownLatch;
 class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
 
     private static final Logger LOGGER = LogManager.getLogger(ZooKeeperShellImpl.class);
-    private static final int ZK_DEFAULT_SESSION_TIMEOUT = 15000;
+
     private final CountDownLatch connSignal = new CountDownLatch(1);
-    private final Map<String, ObserverInfo> observerMap = new HashMap<>(); // znode path - > data
+    private final Map<String, RemoteServiceObserver> observerMap = new HashMap<>();
+    private final ObjectMapper jsonMapper = new ObjectMapper();
+    private ZkConfig zkConfig = new ZkConfig();
     private ZooKeeper zk;
-
-    private class ObserverInfo {
-
-        private String serviceName;
-        private String serviceHost;
-        private RemoteServiceObserver znodeObserver;
-
-        public ObserverInfo(String serviceName, String host, RemoteServiceObserver znodeObserver) {
-            this.serviceName = serviceName;
-            this.serviceHost = host;
-            this.znodeObserver = znodeObserver;
-        }
-    }
 
     @Override
     public ZooKeeper connectToZk(String host) {
-        return connectToZk(host, ZK_DEFAULT_SESSION_TIMEOUT);
+        return connectToZk(host, zkConfig.getSessionTimeout());
     }
 
     @Override
@@ -69,20 +61,9 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
                     case SyncConnected: {
                         connSignal.countDown();
                     }
-
-//                    case Expired: {  // case SyncConnected: -> describes in zk class
-//                        LOGGER.log(Level.WARN, "Session expired!");
-//                        break;
-//                    }
-//
-//                    case Disconnected: {
-//                        LOGGER.log(Level.WARN, "Your host is not connected to the zk!");
-//                        break;
-//                    }
                 }
                 break;
             }
-
             case NodeDeleted: {
                 updateHostAndEstablishWatch(zNodePath);
                 break;
@@ -103,15 +84,23 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
     }
 
     @Override
-    public String createServiceZNode(String serviceName, byte[] zNodeData) {
+    public String createServiceZNode(ServiceData serviceData) {
         if (zk != null) {
+            final String serviceName = serviceData.getServiceName();
             String path = null;
             try {
-                String zNodePath = "/" + serviceName + "/n_";
-                path = zk.create(zNodePath, zNodeData, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+                String zNodePath = zkConfig.getBaseServicesPath() + "/" + serviceName + "/n_";
+                byte[] serviceDataBytes = new byte[0];
+                path = zk.create(zNodePath, serviceDataBytes, ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL_SEQUENTIAL);
+                serviceData.setZNodePath(path);
+                serviceDataBytes = serializeServiceData(serviceData);
+                zk.setData(path, serviceDataBytes, 0);
+                if (serviceDataBytes == null) {
+                    return null;
+                }
             } catch (KeeperException | InterruptedException e) {
                 LOGGER.log(Level.ERROR, "Exception in the create process. " + e);
-                return null;
+                return path;
             }
             LOGGER.log(Level.INFO, "Created a zNode for " + serviceName);
             return path;
@@ -120,42 +109,68 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
     }
 
     @Override
-    public boolean addObserverToService(String serviceName, RemoteServiceObserver zNodeObserver) {
-        String serviceZNodePath = "/" + serviceName;
-        String serviceHost = null;
+    public boolean addObserverToService(RemoteServiceObserver zNodeObserver) {
+        final String serviceName = zNodeObserver.getRemoteServiceName();
+        String serviceZNodePath = zkConfig.getBaseServicesPath() + "/" + serviceName;
         try {
-            String terminalZNodePath = receiveTerminalZNodePath(serviceZNodePath);
+            String terminalZNodePath = receiveAnyTerminalZNodePath(serviceZNodePath);
             if (terminalZNodePath == null) {
                 LOGGER.log(Level.WARN, "No free zNodes at " + serviceName);
                 return false;
             }
-            byte[] serviceHostBytes = zk.getData(terminalZNodePath, true, null); // set watch in true var
-            serviceHost = new String(serviceHostBytes);
-            saveObserverInfo(terminalZNodePath, serviceName, serviceHost, zNodeObserver);
+            byte[] zNodeData = zk.getData(terminalZNodePath, true, null);
+            ServiceData serviceData = deserializeServiceData(zNodeData);
+            if (serviceData == null) {
+                return false;
+            }
+            zNodeObserver.update(serviceData.getHost() + ":" + serviceData.getPort());
+            saveObserverData(terminalZNodePath, zNodeObserver);
         } catch (KeeperException | InterruptedException e) {
             LOGGER.log(Level.ERROR, e);
             return false;
         }
-        LOGGER.log(Level.DEBUG, "Added observer for " + serviceName);
-        zNodeObserver.update(serviceHost);
+        LOGGER.log(Level.INFO, "Added observer for " + serviceName);
         return true;
     }
 
     @Override
-    public List<ZNodeServiceEntity> receiveWorkServicesInfo(List<String> serviceNameList) {
-        if (serviceNameList != null && serviceNameList.size() != 0) {
-            List<ZNodeServiceEntity> serviceEntityList = new ArrayList<>();
-            for(String serviceName : serviceNameList) {
-                receiveServiceEntityList(serviceName, zk)
-                        .stream()
-                        .forEach(entity -> serviceEntityList.add(entity));
-            }
-            return serviceEntityList;
+    public List<ServiceData> receiveServicesData() {
+        List<String> terminalZNodePathList = null;
+        try {
+            terminalZNodePathList = receiveAllTerminalZNodePaths();
+        } catch (KeeperException | InterruptedException e) {
+            LOGGER.log(Level.ERROR, e);
+            return null;
         }
-        return null;
+        final List<ServiceData> serviceDataList = new ArrayList<>();
+        terminalZNodePathList
+                .parallelStream()
+                .forEach(service -> {
+                    try {
+                        byte[] zNodeData = zk.getData(service, false, null);
+                        ServiceData serviceData = deserializeServiceData(zNodeData);
+                        if (serviceData != null) {
+                            serviceDataList.add(serviceData);
+                        }
+                    } catch (KeeperException | InterruptedException e) {
+                        LOGGER.log(Level.ERROR, e);
+                    }
+        });
+        return serviceDataList;
     }
 
-    private String receiveTerminalZNodePath(String serviceZNodePath) throws KeeperException, InterruptedException {
+    private List<String> receiveAllTerminalZNodePaths() throws KeeperException, InterruptedException {
+        final String baseServicePath = zkConfig.getBaseServicesPath();
+        final List<String> terminalZNodePathList = new ArrayList<>();
+        for(String serviceName : zk.getChildren(baseServicePath, false)) {
+            zk.getChildren(baseServicePath + "/" + serviceName, false)
+                    .parallelStream()
+                    .forEach(path -> terminalZNodePathList.add(baseServicePath + "/" + serviceName + "/" + path));
+        }
+        return terminalZNodePathList;
+    }
+
+    private String receiveAnyTerminalZNodePath(String serviceZNodePath) throws KeeperException, InterruptedException {
         List<String> childrenPathList= zk.getChildren(serviceZNodePath, false);
         if (childrenPathList != null && childrenPathList.size() != 0) {
             int childNumberInList = generateId(childrenPathList.size());
@@ -169,59 +184,64 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
         return (int)Math.random() * upperBound;
     }
 
-    private void saveObserverInfo(String terminalZNodePath, String serviceName, String serviceHost, RemoteServiceObserver znodeObserver) { // znode in not null
+    private void saveObserverData(String terminalZNodePath, RemoteServiceObserver zNodeObserver) {
         if (observerMap.get(terminalZNodePath) == null) {
-            ObserverInfo observerInfo = new ObserverInfo(serviceName, serviceHost, znodeObserver);
-            observerMap.put(terminalZNodePath, observerInfo);
+            observerMap.put(terminalZNodePath, zNodeObserver);
         }
     }
 
     private boolean updateHostAndEstablishWatch(String deletedZNodePath) {
-        ObserverInfo observerInfo = observerMap.get(deletedZNodePath);
-        if (observerInfo != null) {
-            String serviceZNodePath = "/" + observerInfo.serviceName;
-            String terminalZNodePath = null;
+        RemoteServiceObserver rso = observerMap.get(deletedZNodePath);
+        if (rso != null) {
+            String serviceZNodePath = zkConfig.getBaseServicesPath() + "/" + rso.getRemoteServiceName();
+            String terminalZNodePath;
             try {
-                terminalZNodePath = receiveTerminalZNodePath(serviceZNodePath);
+                terminalZNodePath = receiveAnyTerminalZNodePath(serviceZNodePath);
                 if (terminalZNodePath == null) {
-                    LOGGER.log(Level.WARN, "No free zNodes at " + observerInfo.serviceName +
+                    LOGGER.log(Level.WARN, "No free zNodes at " + rso.getRemoteServiceName() +
                             ". Setting the service's address in observer to null");
-                    observerInfo.znodeObserver.update(null);
+                    rso.update(null);
                     observerMap.remove(deletedZNodePath);
                     return false;
                 }
-                byte[] serviceHostBytes = zk.getData(terminalZNodePath, true, null);
+                byte[] zNodeData = zk.getData(terminalZNodePath, true, null);
+                ServiceData serviceData = deserializeServiceData(zNodeData);
+                if (serviceData == null) {
+                    return false;
+                }
                 LOGGER.log(Level.DEBUG, "A watch was set on " + terminalZNodePath);
-                observerInfo.serviceHost = new String(serviceHostBytes);
+                rso.update(terminalZNodePath);
             } catch (KeeperException | InterruptedException e ) {
                 LOGGER.log(Level.ERROR, e);
                 return false;
             }
             observerMap.remove(deletedZNodePath);
-            observerMap.put(terminalZNodePath, observerInfo);
+            observerMap.put(terminalZNodePath, rso);
             return true;
         }
         return false;
     }
 
-    private List<ZNodeServiceEntity> receiveServiceEntityList(String serviceName, ZooKeeper zk) {
-        List<ZNodeServiceEntity> serviceEntityList = new ArrayList<>();
+    private byte[] serializeServiceData(ServiceData serviceData) {
+        byte[] serviceDataBytes;
         try {
-            List<String> serviceList = zk.getChildren("/" + serviceName, false);
-            for(String serviceInfo : serviceList) {
-                ZNodeServiceEntity serviceEntity = new ZNodeServiceEntity();
-                serviceEntity.setServiceName(serviceName);
-                String serviceZNodePath = "/" + serviceName + "/" + serviceInfo;
-                serviceEntity.setZNodePath(serviceZNodePath);
-                byte[] zNodeData = zk.getData(serviceZNodePath, false, null);
-                serviceEntity.setHostPort(new String(zNodeData));
-                serviceEntityList.add(serviceEntity);
-            }
-        } catch (KeeperException | InterruptedException e) {
-            LOGGER.log(Level.ERROR, e);
+            serviceDataBytes = jsonMapper.writeValueAsBytes(serviceData);
+        } catch (JsonProcessingException e) {
+            LOGGER.log(Level.ERROR, "Exception in the serialize process. " + e);
             return null;
         }
-        return serviceEntityList;
+        return serviceDataBytes;
+    }
+
+    private ServiceData deserializeServiceData(byte[] serviceDataBytes) {
+        ServiceData serviceData;
+        try {
+            serviceData = jsonMapper.readValue(serviceDataBytes, ServiceData.class);
+        } catch (IOException e) {
+            LOGGER.log(Level.ERROR, "Can not deserialize a zNodeData. " + e);
+            return null;
+        }
+        return serviceData;
     }
 
 }

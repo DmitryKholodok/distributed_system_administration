@@ -1,16 +1,13 @@
 package by.kholodok.coursework.zkshell;
 
+import by.kholodok.coursework.zkshell.entity.ServiceData;
 import by.kholodok.coursework.zkshell.observer.RemoteServiceObserver;
-import by.kholodok.coursework.zkshell.entity.ZNodeServiceEntity;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.*;
 
 /**
  * Created by dmitrykholodok on 12/12/17
@@ -19,37 +16,62 @@ import java.util.concurrent.Future;
 public class ZkShellClient {
 
     private static final Logger LOGGER = LogManager.getLogger(ZkShellClient.class);
+
+    private ExecutorService executorService;
     private ZooKeeperShell zkShell;
     private List<RemoteServiceObserver> remoteServiceObserverList;
-    private String currServiceName;
+    private ServiceData serviceData;
 
     public ZkShellClient(String zkHostPort) {
         establishConnection(zkHostPort);
     }
 
-    public void setCurrServiceName(String currServiceName) {
-        this.currServiceName = currServiceName;
+    public List<RemoteServiceObserver> getRemoteServiceObserverList() {
+        return remoteServiceObserverList;
     }
-
     public void setRemoteServiceObserverList(List<RemoteServiceObserver> remoteServiceObserverList) {
         this.remoteServiceObserverList = remoteServiceObserverList;
     }
+    public void setServiceData(ServiceData serviceData) {
+        this.serviceData = serviceData;
+    }
 
-    public List<ZNodeServiceEntity> receiveWorkServiceInfo(List<String> serviceNameList) {
-        return zkShell.receiveWorkServicesInfo(serviceNameList);
+    public List<ServiceData> receiveWorkServiceInfo() {
+        return zkShell.receiveServicesData();
     }
 
     public void startTrackingServices() {
-        if (currServiceName == null) {
-            LOGGER.log(Level.FATAL, "No service name found!");
+        if (serviceData == null || serviceData.isEmpty()) {
+            LOGGER.log(Level.FATAL, "Filling the service data error!");
             throw new RuntimeException();
         }
-        byte[] currHostPort = new String("localhost:8080").getBytes();
-        zkShell.createServiceZNode(currServiceName, currHostPort);
+        zkShell.createServiceZNode(serviceData);
         remoteServiceObserverList
-                .stream()
+                .parallelStream()
                 .forEach(remoteServiceObserver ->
-                        zkShell.addObserverToService(remoteServiceObserver.receiveServiceName(), remoteServiceObserver));
+                        zkShell.addObserverToService(remoteServiceObserver));
+        Runnable task = () -> {
+            final int SLEEP_TIME = 3;
+            LOGGER.log(Level.INFO, "Start tracking the services . . .");
+            while(true) {
+                remoteServiceObserverList
+                        .parallelStream()
+                        .filter(remoteServiceObserver -> remoteServiceObserver.getServiceHostPort() == null)
+                        .forEach(rso -> zkShell.addObserverToService(rso));
+                try {
+                    TimeUnit.SECONDS.sleep(SLEEP_TIME);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        };
+        executorService = Executors.newSingleThreadExecutor();
+        executorService.submit(task);
+    }
+
+    public void close() {
+        executorService.shutdownNow();
+        zkShell.close();
     }
 
     private void establishConnection(String zkHostPort) {
@@ -65,6 +87,7 @@ public class ZkShellClient {
             LOGGER.log(Level.ERROR, e);
             return;
         }
+        LOGGER.log(Level.DEBUG, "Connection established . . .");
     }
 
 }
