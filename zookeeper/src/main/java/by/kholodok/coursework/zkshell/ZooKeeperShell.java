@@ -13,8 +13,9 @@ import java.util.List;
 interface ZooKeeperShell {
     ZooKeeper connectToZk(String host);
     ZooKeeper connectToZk(String host, int port);
-    String createServiceZNode(ServiceData serviceInfo);
-    boolean addObserverToService(RemoteServiceObserver observer);
+    String createServiceZNode(ServiceData serviceData);
+    boolean addObserverToService(RemoteServiceObserver rso);
     List<ServiceData> receiveServicesData();
+    boolean isDead();
     void close();
 }

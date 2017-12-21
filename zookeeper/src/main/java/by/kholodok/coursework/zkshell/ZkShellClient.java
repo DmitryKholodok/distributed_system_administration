@@ -23,6 +23,7 @@ public class ZkShellClient {
     private ServiceData serviceData;
 
     public ZkShellClient(String zkHostPort) {
+        executorService = Executors.newSingleThreadExecutor();
         establishConnection(zkHostPort);
     }
 
@@ -42,30 +43,36 @@ public class ZkShellClient {
 
     public void startTrackingServices() {
         if (serviceData == null || serviceData.isEmpty()) {
-            LOGGER.log(Level.FATAL, "Filling the service data error!");
+            LOGGER.log(Level.FATAL, "Skipped the service data!");
             throw new RuntimeException();
         }
         zkShell.createServiceZNode(serviceData);
-        remoteServiceObserverList
-                .parallelStream()
-                .forEach(remoteServiceObserver ->
-                        zkShell.addObserverToService(remoteServiceObserver));
         Runnable task = () -> {
             final int SLEEP_TIME = 3;
-            LOGGER.log(Level.INFO, "Start tracking the services . . .");
+            boolean setToNull = false;
             while(true) {
-                remoteServiceObserverList
-                        .parallelStream()
-                        .filter(remoteServiceObserver -> remoteServiceObserver.getServiceHostPort() == null)
-                        .forEach(rso -> zkShell.addObserverToService(rso));
                 try {
                     TimeUnit.SECONDS.sleep(SLEEP_TIME);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
+                if(zkShell.isDead()) {
+                    if (!setToNull) {
+                        LOGGER.log(Level.INFO, "Zookeeper is dead. Setting to null all service urls ");
+                        setToNull = true;
+                        remoteServiceObserverList
+                                .parallelStream()
+                                .forEach(rso -> rso.update(null));
+                    }
+                } else {
+                    setToNull = false;
+                    remoteServiceObserverList
+                            .parallelStream()
+                            .filter(remoteServiceObserver -> remoteServiceObserver.getServiceHostPort() == null)
+                            .forEach(rso -> zkShell.addObserverToService(rso));
+                }
             }
         };
-        executorService = Executors.newSingleThreadExecutor();
         executorService.submit(task);
     }
 
@@ -75,18 +82,8 @@ public class ZkShellClient {
     }
 
     private void establishConnection(String zkHostPort) {
-        Callable<ZooKeeperShell> task = () -> {
-            ZooKeeperShell zooKeeperShell = new ZooKeeperShellImpl();
-            zooKeeperShell.connectToZk(zkHostPort);
-            return zooKeeperShell;
-        };
-        Future<ZooKeeperShell> zkFuture = Executors.newSingleThreadExecutor().submit(task);
-        try {
-            zkShell = zkFuture.get();
-        } catch (InterruptedException | ExecutionException e) {
-            LOGGER.log(Level.ERROR, e);
-            return;
-        }
+        zkShell = new ZooKeeperShellImpl();
+        zkShell.connectToZk(zkHostPort);
         LOGGER.log(Level.DEBUG, "Connection established . . .");
     }
 

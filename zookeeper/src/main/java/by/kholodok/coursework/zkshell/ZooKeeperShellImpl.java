@@ -8,7 +8,6 @@ import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.zookeeper.*;
-import org.springframework.beans.factory.annotation.Autowired;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -16,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Created by dmitrykholodok on 12/3/17
@@ -30,6 +30,7 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
     private final ObjectMapper jsonMapper = new ObjectMapper();
     private ZkConfig zkConfig = new ZkConfig();
     private ZooKeeper zk;
+    private AtomicReference<Boolean> dead = new AtomicReference<>();
 
     @Override
     public ZooKeeper connectToZk(String host) {
@@ -51,7 +52,7 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
 
     @Override
     public void process(WatchedEvent event) {
-        LOGGER.log(Level.DEBUG, "Got event: type - " + event.getType() + ", state - " + event.getState() + ", path - " + event.getPath());
+        LOGGER.log(Level.INFO, "Got event: type - " + event.getType() + ", state - " + event.getState() + ", path - " + event.getPath());
         String zNodePath = event.getPath();
         switch (event.getType()) {  // event type -> something changed in the zookeeper . . .
             case None: {
@@ -59,8 +60,15 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
                 switch (event.getState()) { // zookeeper connection state
 
                     case SyncConnected: {
+                        dead.set(false);
                         connSignal.countDown();
+                        break;
                     }
+
+                    case Disconnected:
+                    case Expired:
+                        dead.set(true);
+
                 }
                 break;
             }
@@ -95,9 +103,6 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
                 serviceData.setZNodePath(path);
                 serviceDataBytes = serializeServiceData(serviceData);
                 zk.setData(path, serviceDataBytes, 0);
-                if (serviceDataBytes == null) {
-                    return null;
-                }
             } catch (KeeperException | InterruptedException e) {
                 LOGGER.log(Level.ERROR, "Exception in the create process. " + e);
                 return path;
@@ -135,7 +140,7 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
 
     @Override
     public List<ServiceData> receiveServicesData() {
-        List<String> terminalZNodePathList = null;
+        List<String> terminalZNodePathList;
         try {
             terminalZNodePathList = receiveAllTerminalZNodePaths();
         } catch (KeeperException | InterruptedException e) {
@@ -156,7 +161,15 @@ class ZooKeeperShellImpl implements ZooKeeperShell, Watcher {
                         LOGGER.log(Level.ERROR, e);
                     }
         });
+        if (serviceDataList.isEmpty()) {
+            return null;
+        }
         return serviceDataList;
+    }
+
+    @Override
+    public boolean isDead() {
+        return dead.get();
     }
 
     private List<String> receiveAllTerminalZNodePaths() throws KeeperException, InterruptedException {
