@@ -1,19 +1,55 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <beans:beans xmlns="http://www.springframework.org/schema/mvc"
-             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:beans="http://www.springframework.org/schema/beans"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:beans="http://www.springframework.org/schema/beans"
              xmlns:context="http://www.springframework.org/schema/context"
+             xmlns:util="http://www.springframework.org/schema/util"
              xsi:schemaLocation="http://www.springframework.org/schema/mvc http://www.springframework.org/schema/mvc/spring-mvc.xsd
 		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
-		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd">
+		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util.xsd">
 
     <!-- Enables the Spring MVC @Controller programming model -->
     <annotation-driven />
-    <context:component-scan base-package="by.kholodok.coursework" />
+    <context:component-scan base-package="by.kholodok.coursework.service_b" />
+    <context:property-placeholder location="classpath:config.properties"/>
 
-    <beans:bean
-            class="org.springframework.web.servlet.view.InternalResourceViewResolver">
-        <beans:property name="prefix" value="/WEB-INF/views/" />
-        <beans:property name="suffix" value=".jsp" />
+    <beans:bean class="by.kholodok.coursework.zkshell.ZkShellClient" init-method="startTrackingServices" destroy-method="close">
+        <beans:constructor-arg value="${zk.hostport}"/>
+        <beans:property name="serviceData" ref="serviceDataOfB"/>
+        <beans:property name="remoteServiceObserverList">
+            <beans:list value-type="by.kholodok.coursework.zkshell.observer.RemoteServiceObserver">
+                <beans:ref bean="remoteServiceAObserver"/>
+            </beans:list>
+        </beans:property>
     </beans:bean>
+
+    <util:map id="serviceEndpoints" map-class="java.util.HashMap">
+        <beans:entry key="${ep0.name}" value="${ep0.value}"/>
+        <beans:entry key="${ep1.name}" value="${ep1.value}"/>
+    </util:map>
+
+    <beans:bean id = "serviceDataOfB" class="by.kholodok.coursework.zkshell.entity.ServiceData">
+        <beans:property name="serviceName" value="${service.name}"/>
+        <beans:property name="host" value="${service.host}"/>
+        <beans:property name="port" value="${vm.service.port}"/>
+        <beans:property name="endpoints" ref="serviceEndpoints"/>
+    </beans:bean>
+
+    <beans:bean id="remoteServiceAObserver" class="by.kholodok.coursework.zkshell.observer.RemoteServiceObserver">
+        <beans:constructor-arg value="${observer.service.name}"/>
+    </beans:bean>
+
+    <beans:bean class="by.kholodok.coursework.zkshell.observer.ObserversProvider">
+        <beans:constructor-arg>
+            <beans:list value-type="by.kholodok.coursework.zkshell.observer.RemoteServiceObserver">
+                <beans:ref bean="remoteServiceAObserver"/>
+            </beans:list>
+        </beans:constructor-arg>
+    </beans:bean>
+
+    <beans:bean class="by.kholodok.coursework.service_b.service.LogsService"/>
+    <beans:bean class="by.kholodok.coursework.service_b.dao.LogsDAO"/>
+    <beans:bean class="com.fasterxml.jackson.databind.ObjectMapper"/>
+
 
 </beans:beans>

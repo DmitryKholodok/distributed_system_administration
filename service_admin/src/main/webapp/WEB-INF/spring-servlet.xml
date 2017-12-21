@@ -7,7 +7,7 @@
 		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd">
 
     <!-- Enables the Spring MVC @Controller programming model -->
-    <annotation-driven />
+    <annotation-driven/>
     <context:annotation-config/>
     <context:component-scan base-package="by.kholodok.coursework.service_admin" />
 
@@ -16,5 +16,11 @@
         <beans:property name="prefix" value="/WEB-INF/views/" />
         <beans:property name="suffix" value=".jsp" />
     </beans:bean>
+
+    <beans:bean id="adminZkId" class="by.kholodok.coursework.zkshell.ZkShellClient">
+        <beans:constructor-arg value="localhost:2181"/>
+    </beans:bean>
+
+    <beans:bean class="com.fasterxml.jackson.databind.ObjectMapper"/>
 
 </beans:beans>
